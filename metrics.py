@@ -78,9 +78,14 @@ def compute_img_metric(im1t: torch.Tensor, im2t: torch.Tensor,
                 pixelnum = mask[i, ..., 0].sum()
                 value = value - 10 * np.log10(hei * wid / pixelnum)
         elif metric in ["ssim"]:
-            value, ssimmap = photometric["ssim"](
-                im1[i], im2[i], multichannel=True, full=True
-            )
+            # import sys
+            # sys.path.append('..')
+            # from toolfunctions import tool
+            # import pdb
+            # pdb.set_trace()
+            value, ssimmap = photometric["ssim"]( #TODO debug: win_size exceeds image extent. Either ensure that your images are at least 7x7; or pass win_size explicitly in the function call, with an odd value less than or equal to the smaller side of your images.
+                im1[i], im2[i], channel_axis=-1, full=True, data_range=im1[i].max()-im1[i].min()
+            )# 出现bug原因：skimage库更新，不再使用multichannel参数，使用channel_axis=-1代替，以及需要设置datarange
             if mask is not None:
                 value = (ssimmap * mask[i]).sum() / mask[i].sum()
         elif metric in ["lpips"]:

@@ -12,7 +12,9 @@ from metrics import compute_img_metric
 
 # np.random.seed(0)
 DEBUG = False
-
+import sys
+sys.path.append('..')
+from toolfunctions import tool
 
 def config_parser():
     import configargparse
@@ -320,7 +322,8 @@ def train():
         kernelnet = None
     else:
         raise RuntimeError(f"kernel_type {args.kernel_type} not recognized")
-
+    print(tool.printinfo())
+    #region Create nerf model
     # Create nerf model
     nerf = NeRFAll(args, kernelnet)
     nerf = nn.DataParallel(nerf, list(range(args.num_gpu)))
@@ -383,6 +386,9 @@ def train():
     # Move testing data to GPU
     render_poses = torch.tensor(render_poses[:, :3, :4]).cuda()
     nerf = nerf.cuda()
+#endregion
+
+    print(tool.printinfo())
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print('RENDER ONLY')
@@ -500,9 +506,10 @@ def train():
 
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
-
     start = start + 1
     for i in range(start, N_iters):
+        print(i,tool.printinfo())
+
         time0 = time.time()
 
         # Sample random ray batch
@@ -593,6 +600,10 @@ def train():
             #     imageio.mimwrite(moviebase + 'rgb_still.mp4', to8b(rgbs_still), fps=30, quality=8)
 
         if i % args.i_testset == 0 and i > 0:
+            print(i,tool.printinfo())
+            # 发现这里有速度瓶颈，不再打印所有图像，减少poses的数量
+            test_pose_num = 1
+            new_poses = poses[i_test[:test_pose_num]]
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses.shape)
@@ -601,7 +612,7 @@ def train():
             print(f"Append {dummy_num} # of poses to fill all the GPUs")
             with torch.no_grad():
                 nerf.eval()
-                rgbs, _ = nerf(H, W, K, args.chunk, poses=torch.cat([poses, dummy_poses], dim=0).cuda(),
+                rgbs, _ = nerf(H, W, K, args.chunk, poses=torch.cat([new_poses, dummy_poses], dim=0).cuda(),
                                render_kwargs=render_kwargs_test)
                 rgbs = rgbs[:len(rgbs) - dummy_num]
                 rgbs_save = rgbs  # (rgbs - rgbs.min()) / (rgbs.max() - rgbs.min())
@@ -612,8 +623,8 @@ def train():
                     imageio.imwrite(filename, rgb8)
 
                 # evaluation
-                rgbs = rgbs[i_test]
-                target_rgb_ldr = imagesf[i_test]
+                # rgbs = rgbs[i_test]
+                target_rgb_ldr = imagesf[i_test[:test_pose_num]]
 
                 test_mse = compute_img_metric(rgbs, target_rgb_ldr, 'mse')
                 test_psnr = compute_img_metric(rgbs, target_rgb_ldr, 'psnr')
