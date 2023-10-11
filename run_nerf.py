@@ -602,7 +602,7 @@ def train():
         if i % args.i_testset == 0 and i > 0:
             print(i,tool.printinfo())
             # 发现这里有速度瓶颈，不再打印所有图像，减少poses的数量
-            test_pose_num = 1
+            test_pose_num = len(i_test)
             new_poses = poses[i_test[:test_pose_num]]
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)

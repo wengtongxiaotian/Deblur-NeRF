@@ -47,7 +47,8 @@ class DSKnet(nn.Module):
         optim_spatialvariant_trans: whether to optimize the ray origin for each view or each kernel point. 
         """
         super().__init__()
-        self.num_pt = num_pt
+        self.mask = False
+        self.num_pt = num_pt * 2 if self.mask else num_pt# TODO mask half
         self.num_img = num_img
         self.short_cut = short_cut
         self.kernel_hwindow = kernel_hwindow
@@ -59,14 +60,14 @@ class DSKnet(nn.Module):
                                                         f"should be input/output"
         self.register_buffer("poses", poses)
         self.register_parameter("pattern_pos",
-                                nn.Parameter(torch.randn(pattern_num, num_pt, 2)
+                                nn.Parameter(torch.randn(pattern_num, self.num_pt, 2)
                                              .type(torch.float32) * pattern_init_radius, True))
         self.optim_trans = optim_trans
         self.optim_sv_trans = optim_spatialvariant_trans
 
         if optim_trans:
             self.register_parameter("pattern_trans",
-                                    nn.Parameter(torch.zeros(pattern_num, num_pt, 2)
+                                    nn.Parameter(torch.zeros(pattern_num, self.num_pt, 2)
                                                  .type(torch.float32), True))
 
         if in_embed > 0:
@@ -154,7 +155,7 @@ class DSKnet(nn.Module):
         x1 = self.linears(x)
         x1 = torch.cat([x, x1], dim=-1) if self.short_cut else x1
         x1 = self.linears1(x1)
-
+        # print(x1.shape,x.shape,self.short_cut)
         delta_trans = None
         if self.optim_sv_trans:
             delta_trans, delta_pos, weight = torch.split(x1, [2, 2, 1], dim=-1)
@@ -179,6 +180,20 @@ class DSKnet(nn.Module):
         # get rays from offsetted pt position
         rays_x = (rays_x - K[0, 2] + new_rays_xy[..., 0]) / K[0, 0]
         rays_y = -(rays_y - K[1, 2] + new_rays_xy[..., 1]) / K[1, 1]
+        # random mask [dirs.shape bs,5,3 delta_trans.shape bs,5]
+        # import pdb
+        # pdb.set_trace()
+        # unmasked_ray_index = torch.random.randint(0, 
+        #end random mask
+        # print(randperm)
+        if self.mask:
+            randperm = torch.randperm(self.num_pt)
+            unmasked_num = self.num_pt//2
+            rays_x,rays_y = rays_x[:,randperm[:unmasked_num]],rays_y[:,randperm[:unmasked_num]]
+            delta_trans = delta_trans[:,randperm[:unmasked_num]]
+            weight = weight[:,randperm[:unmasked_num]]
+            weight = weight/weight.sum(1,keepdims=True)
+        # print(delta_trans.shape)
         dirs = torch.stack([rays_x - delta_trans[..., 0],
                             rays_y - delta_trans[..., 1],
                             -torch.ones_like(rays_x)], -1)
