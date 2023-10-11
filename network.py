@@ -156,8 +156,9 @@ class UNet_3d(nn.Module):
         x = self.output_block(x)
         return x
 if __name__ == '__main__':
-    unet = UNet_3d(in_channels=7)
-    x = torch.zeros(2,7,100,100,100)
+    device = 1
+    unet = UNet_3d(in_channels=7).to(device)
+    x = torch.zeros(2,7,16,64,64).to(device)
     y = unet(x)
     print('end')
 
