@@ -5,7 +5,7 @@ import cv2
 import imageio
 from tensorboardX import SummaryWriter
 
-from NeRF import *
+from NeRF_unet3d import *
 from load_llff import load_llff_data
 from run_nerf_helpers import *
 from metrics import compute_img_metric
@@ -303,7 +303,7 @@ def train():
                        "\\/\n")
 
     # The DSK module
-    if args.kernel_type == 'deformablesparsekernel':
+    if args.kernel_type == '1deformablesparsekernel':
         kernelnet = DSKnet(len(images), torch.tensor(poses[:, :3, :4]),
                            args.kernel_ptnum, args.kernel_hwindow,
                            random_hwindow=args.kernel_random_hwindow, in_embed=args.kernel_rand_embed,
@@ -320,11 +320,14 @@ def train():
                            optim_spatialvariant_trans=args.kernel_spatialvariant_trans)
     elif args.kernel_type == 'none':
         kernelnet = None
-    else:
-        raise RuntimeError(f"kernel_type {args.kernel_type} not recognized")
+    # else:
+    #     raise RuntimeError(f"kernel_type {args.kernel_type} not recognized")
     print(tool.printinfo())
     #region Create nerf model
     # Create nerf model
+    
+    from network import UNet_3d
+    kernelnet = UNet_3d(9,args.kernel_ptnum*7)
     nerf = NeRFAll(args, kernelnet)
     nerf = nn.DataParallel(nerf, list(range(args.num_gpu)))
 
@@ -484,9 +487,9 @@ def train():
     images_idx_tile = np.tile(images_idx_tile, [1, hei, wid])
     train_datas['images_idx'] = images_idx_tile[i_train].reshape(-1, 1).astype(np.int64)
 
-    print('shuffle rays')
-    shuffle_idx = np.random.permutation(len(train_datas['rays']))
-    train_datas = {k: v[shuffle_idx] for k, v in train_datas.items()}
+    # print('shuffle rays')
+    # shuffle_idx = np.random.permutation(len(train_datas['rays']))
+    # train_datas = {k: v[shuffle_idx] for k, v in train_datas.items()}
 
     print('done')
     i_batch = 0
@@ -497,9 +500,20 @@ def train():
 
     poses = torch.tensor(poses).cuda()
     train_datas = {k: torch.tensor(v).cuda() for k, v in train_datas.items()}
-    # import pdb
-    # #train_datas.keys() #dict_keys(['rays', 'rays_x', 'rays_y', 'rgbsf', 'images_idx'])
-    # print(train_datas['images_idx'])
+    import pdb
+    #train_datas.keys() #dict_keys(['rays', 'rays_x', 'rays_y', 'rgbsf', 'images_idx'])
+    # shapes: pixels,2,3 pixels,1 pixels,1 pixels,3 pixels,1
+    train_rays = train_datas['rays'].reshape(len(i_train),hei,wid,2*3)
+    train_rays_x = train_datas['rays_x'].reshape(len(i_train),hei,wid)
+    train_rays_y = train_datas['rays_y'].reshape(len(i_train),hei,wid)
+    train_rgbsf = train_datas['rgbsf'].reshape(len(i_train),hei,wid,3)
+    train_images_idx = train_datas['images_idx'].reshape(len(i_train),hei,wid)
+    train_tensor = torch.cat([train_rays,train_rgbsf],-1).permute(0,3,1,2)
+    print(train_datas['images_idx'])
+    bs = 3
+    patchsize = 16
+    # pt_num = args.kernel_ptnum
+    # pt_num = 1
     # pdb.set_trace()
     N_iters = args.N_iters + 1
     print('Begin')
@@ -512,45 +526,48 @@ def train():
     start = start + 1
     for i in range(start, N_iters):
         print(i,tool.printinfo())
-
-        time0 = time.time()
+        iter_tensor = []
+        for zid in torch.randperm(len(i_train))[:bs]:
+            randomx,randomy = torch.randint(hei-patchsize,(1,)),torch.randint(wid-patchsize,(1,)),
+            iter_tensor.append(train_tensor[zid,:,randomx:randomx+patchsize,randomy:randomy+patchsize,])
+        iter_tensor = torch.stack(iter_tensor).cuda()
+        # print(iter_tensor.shape)
+        # new_rays = kernelnet(iter_tensor)
+        # print(new_rays.shape)
+        # new_rays = new_rays.permute(0,2,3,1).reshape(bs,patchsize,patchsize,pt_num,7) # rayo rayd weight
+        # time0 = time.time()
 
         # Sample random ray batch
-        iter_data = {k: v[i_batch:i_batch + N_rand] for k, v in train_datas.items()}
-        batch_rays = iter_data.pop('rays').permute(0, 2, 1)
+        # iter_data = {k: v[i_batch:i_batch + N_rand] for k, v in train_datas.items()}
+        # batch_rays = iter_data.pop('rays').permute(0, 2, 1)
 
-        i_batch += N_rand
-        if i_batch >= len(train_datas['rays']):
-            print("Shuffle data after an epoch!")
-            shuffle_idx = np.random.permutation(len(train_datas['rays']))
-            train_datas = {k: v[shuffle_idx] for k, v in train_datas.items()}
-            i_batch = 0
+        # i_batch += N_rand
+        # if i_batch >= len(train_datas['rays']):
+        #     print("Shuffle data after an epoch!")
+        #     shuffle_idx = np.random.permutation(len(train_datas['rays']))
+        #     train_datas = {k: v[shuffle_idx] for k, v in train_datas.items()}
+        #     i_batch = 0
 
         #####  Core optimization loop  #####
         nerf.train()
         if i == args.kernel_start_iter:
             torch.cuda.empty_cache()
         rgb, rgb0, extra_loss = nerf(H, W, K, chunk=args.chunk,
-                                     rays=batch_rays, rays_info=iter_data,
-                                     retraw=True, force_naive=i < args.kernel_start_iter,
+                                     rays=iter_tensor, rays_info=None,
+                                     retraw=True, force_naive=False,
                                      **render_kwargs_train)
 
         # Compute Losses
         # =====================
-        target_rgb = iter_data['rgbsf'].squeeze(-2)
+        # print(rgb.shape,rgb0.shape)
+        target_rgb = iter_tensor.permute(0,2,3,1)[...,6:].reshape(-1,3)
+        # print(target_rgb.shape)
         img_loss = img2mse(rgb, target_rgb)
         loss = img_loss
         psnr = mse2psnr(img_loss)
 
         img_loss0 = img2mse(rgb0, target_rgb)
         loss = loss + img_loss0
-
-        extra_loss = {k: torch.mean(v) for k, v in extra_loss.items()}
-        if len(extra_loss) > 0:
-            for k, v in extra_loss.items():
-                if f"kernel_{k}_weight" in vars(args).keys():
-                    if vars(args)[f"{k}_start_iter"] <= i <= vars(args)[f"{k}_end_iter"]:
-                        loss = loss + v * vars(args)[f"kernel_{k}_weight"]
 
         optimizer.zero_grad()
         loss.backward()

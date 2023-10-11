@@ -6,14 +6,13 @@ import pdb
 Conv3d = BayesianShiftConv3d
 
 class UNet_3d(nn.Module):
-    def __init__(self, in_channels=1):
+    def __init__(self, in_channels=1, out_channels=4):
         super(UNet_3d, self).__init__()
-        
         ####################################
         # Encode Blocks
         ####################################
         def _max_pool_block(max_pool):
-            return nn.Sequential(Shift3d((1, 0, 0)), max_pool)
+            return nn.Sequential(Shift3d((1, 0)), max_pool)
 
         # Layers: enc_conv0, enc_conv1, pool1
         self.encode_block_1 = nn.Sequential(
@@ -33,7 +32,7 @@ class UNet_3d(nn.Module):
             return nn.Sequential(
                 Conv3d(48, 48, 3, stride=1, padding=1),
                 nn.LeakyReLU(negative_slope=0.1, inplace=True),
-                _max_pool_block(nn.AvgPool3d(2)),
+                _max_pool_block(nn.AvgPool2d(2,2)),
         )
 
         self.encode_block_3 = _encode_block_3_4_5()
@@ -90,11 +89,11 @@ class UNet_3d(nn.Module):
         ####################################
         # Output Block
         ####################################
-        self.shift = Shift3d((1, 0, 0))
-        nin_a_io = 96 * 8
+        self.shift = Shift3d((1, 0))
+        nin_a_io = 96 * 4
 
         # nin_a,b,c, linear_act
-        self.output_conv = Conv3d(96, 1, 1)
+        self.output_conv = Conv3d(96, out_channels, 1)
         self.output_block = nn.Sequential(
             Conv3d(nin_a_io, nin_a_io, 1),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
@@ -122,20 +121,21 @@ class UNet_3d(nn.Module):
             nn.init.kaiming_normal_(self.output_conv.weight.data)
 
     def forward(self, x, _drop=0):
-        rotated = [rotate_3d(x, rot) for rot in range(8)]
+        rotated = [rotate_3d(x, rot) for rot in range(4)]
         x = torch.cat((rotated), dim=0)
         # Encoder
         pool1 = self.encode_block_1(x) # 1
         pool2 = self.encode_block_2(pool1) # 1
         pool3 = self.encode_block_3(pool2) # 1/2
+        # print(x.shape,pool1.shape,pool2.shape,pool3.shape)
         pool4 = self.encode_block_4(pool3) # 1/4
         pool5 = self.encode_block_5(pool4) # 1/8
         encoded = self.encode_block_6(pool5) # 1/8
-
         # Decoder
         upsample5 = self.decode_block_6(encoded) # 1/4
         concat5 = torch.cat((upsample5, pool4), dim=1)
         upsample4 = self.decode_block_5(concat5)  # 1/2 96
+        # upsample4 = self.decode_block_5(pool4)  # 1/2 96
         concat4 = torch.cat((upsample4, pool3), dim=1) # 144
         upsample3 = self.decode_block_4(concat4) # 1
         concat3 = torch.cat((upsample3, pool2), dim=1) # 144
@@ -147,20 +147,20 @@ class UNet_3d(nn.Module):
 
         shifted = self.shift(x)
         # Unstack, rotate and combine
-        rotated_batch = torch.chunk(shifted, 8, dim=0)
+        rotated_batch = torch.chunk(shifted, 4, dim=0)
         aligned = [
             rotate_3d_re(rotated, rot)
-            for rotated, rot in zip(rotated_batch, range(8))
+            for rotated, rot in zip(rotated_batch, range(4))
         ]
         x = torch.cat(aligned, dim=1)
         x = self.output_block(x)
         return x
 if __name__ == '__main__':
     device = 1
-    unet = UNet_3d(in_channels=7).to(device)
-    x = torch.zeros(2,7,16,64,64).to(device)
+    unet = UNet_3d(7,4*7).to(device)
+    x = torch.zeros(2,7,64,64).to(device)
     y = unet(x)
-    print('end')
+    print(y.shape)
 
 
 

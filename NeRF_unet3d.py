@@ -447,13 +447,15 @@ class NeRFAll(nn.Module):
             force_baseline = kwargs.pop("force_naive", True)
             # kernel mode, run multiple rays to get result of one ray
             if self.kernelsnet is not None and not force_baseline:
-                if self.kernelsnet.require_depth:
-                    with torch.no_grad():
-                        rgb, depth, acc, extras = self.render(H, W, K, chunk, rays, **kwargs)
-                        rays_info["ray_depth"] = depth[:, None]
+                new_rays = self.kernelsnet(rays)
+                # print(new_rays.shape)
+                pt_num = new_rays.shape[1]//7
+                new_rays = new_rays.permute(0,2,3,1).reshape(-1,pt_num,7) # rayo rayd weight
+                rayso,raysd,weight = new_rays[...,:3],new_rays[...,3:6],new_rays[...,6],
+                weight = self.sigma_activate(weight)
+                weight = weight/(weight.sum(-1,keepdims=True)+1e-2)
+                new_rays = torch.stack([rayso,raysd],-1)
 
-                # time0 = time.time()
-                new_rays, weight, align_loss = self.kernelsnet(H, W, K, rays, rays_info)
                 ray_num, pt_num = new_rays.shape[:2]
 
                 # time1 = time.time()
@@ -473,12 +475,21 @@ class NeRFAll(nn.Module):
                 other_loss = {}
                 # compute align loss, some priors of the ray pattern
                 # ========================
-                if align_loss is not None:
-                    other_loss["align"] = align_loss.reshape(1, 1)
+                # if align_loss is not None:
+                #     other_loss["align"] = align_loss.reshape(1, 1)
 
                 return rgb, rgb0, other_loss
             else:
+                pt_num = rays.shape[-2]
+                rays = rays.reshape(-1,pt_num,7)
+                ray_num = rays.shape[0]
+                rayso,raysd,weight = rays[...,:3],rays[...,3:6],rays[...,6],
+                rays = torch.stack([rayso,raysd],-1)
                 rgb, depth, acc, extras = self.render(H, W, K, chunk, rays, **kwargs)
+                rgb_pts = rgb.reshape(ray_num, pt_num, 3)
+                rgb0_pts = extras['rgb0'].reshape(ray_num, pt_num, 3)
+                rgb = torch.sum(rgb_pts * weight[..., None], dim=1)
+                rgb0 = torch.sum(rgb0_pts * weight[..., None], dim=1)
                 return self.tonemapping(rgb), self.tonemapping(extras['rgb0']), {}
 
         #  evaluation
