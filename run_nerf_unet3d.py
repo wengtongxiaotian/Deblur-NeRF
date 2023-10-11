@@ -510,8 +510,8 @@ def train():
     train_images_idx = train_datas['images_idx'].reshape(len(i_train),hei,wid)
     train_tensor = torch.cat([train_rays,train_rgbsf],-1).permute(0,3,1,2)
     print(train_datas['images_idx'])
-    bs = 3
-    patchsize = 16
+    bs = 2
+    patchsize = 24
     # pt_num = args.kernel_ptnum
     # pt_num = 1
     # pdb.set_trace()
@@ -527,7 +527,8 @@ def train():
     for i in range(start, N_iters):
         print(i,tool.printinfo())
         iter_tensor = []
-        for zid in torch.randperm(len(i_train))[:bs]:
+        frames = bs*args.kernel_ptnum if i<args.kernel_start_iter else bs
+        for zid in torch.randperm(len(i_train))[:frames]:
             randomx,randomy = torch.randint(hei-patchsize,(1,)),torch.randint(wid-patchsize,(1,)),
             iter_tensor.append(train_tensor[zid,:,randomx:randomx+patchsize,randomy:randomy+patchsize,])
         iter_tensor = torch.stack(iter_tensor).cuda()
@@ -554,7 +555,7 @@ def train():
             torch.cuda.empty_cache()
         rgb, rgb0, extra_loss = nerf(H, W, K, chunk=args.chunk,
                                      rays=iter_tensor, rays_info=None,
-                                     retraw=True, force_naive=False,
+                                     retraw=True, force_naive=i<args.kernel_start_iter,
                                      **render_kwargs_train)
 
         # Compute Losses

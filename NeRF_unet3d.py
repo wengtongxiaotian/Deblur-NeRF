@@ -480,16 +480,8 @@ class NeRFAll(nn.Module):
 
                 return rgb, rgb0, other_loss
             else:
-                pt_num = rays.shape[-2]
-                rays = rays.reshape(-1,pt_num,7)
-                ray_num = rays.shape[0]
-                rayso,raysd,weight = rays[...,:3],rays[...,3:6],rays[...,6],
-                rays = torch.stack([rayso,raysd],-1)
+                rays = rays[:,:6].reshape(rays.shape[0],2,3,rays.shape[2],rays.shape[3]).permute(0,3,4,2,1).reshape(-1,3,2)
                 rgb, depth, acc, extras = self.render(H, W, K, chunk, rays, **kwargs)
-                rgb_pts = rgb.reshape(ray_num, pt_num, 3)
-                rgb0_pts = extras['rgb0'].reshape(ray_num, pt_num, 3)
-                rgb = torch.sum(rgb_pts * weight[..., None], dim=1)
-                rgb0 = torch.sum(rgb0_pts * weight[..., None], dim=1)
                 return self.tonemapping(rgb), self.tonemapping(extras['rgb0']), {}
 
         #  evaluation
