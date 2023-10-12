@@ -653,3 +653,6 @@ class NeRFAll(nn.Module):
         weights = torch.stack(weights, 0)
 
         return rgbs, depths, weights
+
+
+
