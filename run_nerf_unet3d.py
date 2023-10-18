@@ -326,7 +326,7 @@ def train():
     #region Create nerf model
     # Create nerf model
     
-    from network import UNet_3d
+    from network import UNet_origin as UNet_3d
     kernelnet = UNet_3d(9,args.kernel_ptnum*7)
     nerf = NeRFAll(args, kernelnet)
     nerf = nn.DataParallel(nerf, list(range(args.num_gpu)))
@@ -511,7 +511,7 @@ def train():
     train_tensor = torch.cat([train_rays,train_rgbsf],-1).permute(0,3,1,2)
     print(train_datas['images_idx'])
     bs = 2
-    patchsize = 24
+    patchsize = 24 #24
     # pt_num = args.kernel_ptnum
     # pt_num = 1
     # pdb.set_trace()
@@ -569,7 +569,12 @@ def train():
 
         img_loss0 = img2mse(rgb0, target_rgb)
         loss = loss + img_loss0
-
+        extra_loss = {k: torch.mean(v) for k, v in extra_loss.items()}
+        if len(extra_loss) > 0:
+            for k, v in extra_loss.items():
+                if f"kernel_{k}_weight" in vars(args).keys():
+                    if vars(args)[f"{k}_start_iter"] <= i <= vars(args)[f"{k}_end_iter"]:
+                        loss = loss + v * vars(args)[f"kernel_{k}_weight"]
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -620,20 +625,61 @@ def train():
             #     render_kwargs_test['c2w_staticcam'] = None
             #     imageio.mimwrite(moviebase + 'rgb_still.mp4', to8b(rgbs_still), fps=30, quality=8)
 
+        # if i % args.i_testset == 0 and i > 0:
+        #     print(i,tool.printinfo())
+        #     # 发现这里有速度瓶颈，不再打印所有图像，减少poses的数量
+        #     test_pose_num = len(i_test)
+        #     new_poses = poses[i_test[:test_pose_num]]
+        #     testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
+        #     os.makedirs(testsavedir, exist_ok=True)
+        #     print('test poses shape', poses.shape)
+        #     dummy_num = ((len(poses) - 1) // args.num_gpu + 1) * args.num_gpu - len(poses)
+        #     dummy_poses = torch.eye(3, 4).unsqueeze(0).expand(dummy_num, 3, 4).type_as(render_poses)
+        #     print(f"Append {dummy_num} # of poses to fill all the GPUs")
+        #     with torch.no_grad():
+        #         nerf.eval()
+        #         rgbs, _ = nerf(H, W, K, args.chunk, poses=torch.cat([new_poses, dummy_poses], dim=0).cuda(),
+        #                        render_kwargs=render_kwargs_test)
+        #         rgbs = rgbs[:len(rgbs) - dummy_num]
+        #         rgbs_save = rgbs  # (rgbs - rgbs.min()) / (rgbs.max() - rgbs.min())
+        #         # saving
+        #         for rgb_idx, rgb in enumerate(rgbs_save):
+        #             rgb8 = to8b(rgb.cpu().numpy())
+        #             filename = os.path.join(testsavedir, f'{rgb_idx:03d}.png')
+        #             imageio.imwrite(filename, rgb8)
+
+        #         # evaluation
+        #         # rgbs = rgbs[i_test]
+        #         target_rgb_ldr = imagesf[i_test[:test_pose_num]]
+
+        #         test_mse = compute_img_metric(rgbs, target_rgb_ldr, 'mse')
+        #         test_psnr = compute_img_metric(rgbs, target_rgb_ldr, 'psnr')
+        #         test_ssim = compute_img_metric(rgbs, target_rgb_ldr, 'ssim')
+        #         test_lpips = compute_img_metric(rgbs, target_rgb_ldr, 'lpips')
+        #         if isinstance(test_lpips, torch.Tensor):
+        #             test_lpips = test_lpips.item()
+
+        #         tensorboard.add_scalar("Test MSE", test_mse, global_step)
+        #         tensorboard.add_scalar("Test PSNR", test_psnr, global_step)
+        #         tensorboard.add_scalar("Test SSIM", test_ssim, global_step)
+        #         tensorboard.add_scalar("Test LPIPS", test_lpips, global_step)
+
+        #     with open(test_metric_file, 'a') as outfile:
+        #         outfile.write(f"iter{i}/globalstep{global_step}: MSE:{test_mse:.8f} PSNR:{test_psnr:.8f}"
+        #                       f" SSIM:{test_ssim:.8f} LPIPS:{test_lpips:.8f}\n")
+
+        #     print('Saved test set')
         if i % args.i_testset == 0 and i > 0:
-            print(i,tool.printinfo())
-            # 发现这里有速度瓶颈，不再打印所有图像，减少poses的数量
-            test_pose_num = len(i_test)
-            new_poses = poses[i_test[:test_pose_num]]
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses.shape)
             dummy_num = ((len(poses) - 1) // args.num_gpu + 1) * args.num_gpu - len(poses)
             dummy_poses = torch.eye(3, 4).unsqueeze(0).expand(dummy_num, 3, 4).type_as(render_poses)
             print(f"Append {dummy_num} # of poses to fill all the GPUs")
+            
             with torch.no_grad():
                 nerf.eval()
-                rgbs, _ = nerf(H, W, K, args.chunk, poses=torch.cat([new_poses, dummy_poses], dim=0).cuda(),
+                rgbs, _ = nerf(H, W, K, args.chunk, poses=torch.cat([poses, dummy_poses], dim=0).cuda(),
                                render_kwargs=render_kwargs_test)
                 rgbs = rgbs[:len(rgbs) - dummy_num]
                 rgbs_save = rgbs  # (rgbs - rgbs.min()) / (rgbs.max() - rgbs.min())
@@ -644,13 +690,13 @@ def train():
                     imageio.imwrite(filename, rgb8)
 
                 # evaluation
-                # rgbs = rgbs[i_test]
-                target_rgb_ldr = imagesf[i_test[:test_pose_num]]
+                rgbs = rgbs[i_test]
+                target_rgb_gt = imagesf[i_test]
 
-                test_mse = compute_img_metric(rgbs, target_rgb_ldr, 'mse')
-                test_psnr = compute_img_metric(rgbs, target_rgb_ldr, 'psnr')
-                test_ssim = compute_img_metric(rgbs, target_rgb_ldr, 'ssim')
-                test_lpips = compute_img_metric(rgbs, target_rgb_ldr, 'lpips')
+                test_mse = compute_img_metric(rgbs, target_rgb_gt, 'mse')
+                test_psnr = compute_img_metric(rgbs, target_rgb_gt, 'psnr')
+                test_ssim = compute_img_metric(rgbs, target_rgb_gt, 'ssim')
+                test_lpips = compute_img_metric(rgbs, target_rgb_gt, 'lpips')
                 if isinstance(test_lpips, torch.Tensor):
                     test_lpips = test_lpips.item()
 
@@ -658,10 +704,13 @@ def train():
                 tensorboard.add_scalar("Test PSNR", test_psnr, global_step)
                 tensorboard.add_scalar("Test SSIM", test_ssim, global_step)
                 tensorboard.add_scalar("Test LPIPS", test_lpips, global_step)
-
+                
             with open(test_metric_file, 'a') as outfile:
                 outfile.write(f"iter{i}/globalstep{global_step}: MSE:{test_mse:.8f} PSNR:{test_psnr:.8f}"
                               f" SSIM:{test_ssim:.8f} LPIPS:{test_lpips:.8f}\n")
+                print(f"**[Evaluation]** Iter{i}/globalstep{global_step}: MSE:{test_mse:.8f} PSNR:{test_psnr:.8f}"
+                              f" SSIM:{test_ssim:.8f} LPIPS:{test_lpips:.8f}")
+            
 
             print('Saved test set')
 

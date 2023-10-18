@@ -4,7 +4,7 @@ from run_nerf_helpers import *
 import os
 import imageio
 import time
-
+import pdb
 
 def init_linear_weights(m):
     if isinstance(m, nn.Linear):
@@ -370,7 +370,7 @@ class NeRFAll(nn.Module):
             z_vals = near * (1. - t_vals) + far * (t_vals)
         else:
             z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
-
+        # pdb.set_trace()
         z_vals = z_vals.expand([N_rays, N_samples])
 
         if perturb > 0.:
@@ -393,9 +393,8 @@ class NeRFAll(nn.Module):
 
         #     raw = run_network(pts)
         raw = self.mlpforward(pts, viewdirs, self.mlp_coarse)
-        rgb_map, density_map, acc_map, weights, depth_map = self.raw2outputs(raw, z_vals, rays_d, raw_noise_std,
-                                                                             white_bkgd, pytest=pytest)
-
+        rgb_map, density_map, acc_map, weights, depth_map = self.raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+        # pdb.set_trace()
         if N_importance > 0:
             rgb_map_0, depth_map_0, acc_map_0, density_map0 = rgb_map, depth_map, acc_map, density_map
 
@@ -422,7 +421,7 @@ class NeRFAll(nn.Module):
             ret['acc0'] = acc_map_0
             ret['density0'] = density_map0
             ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
-
+        # pdb.set_trace()
         for k in ret:
             if torch.isnan(ret[k]).any():
                 print(f"! [Numerical Error] {k} contains nan.")
@@ -449,41 +448,59 @@ class NeRFAll(nn.Module):
             if self.kernelsnet is not None and not force_baseline:
                 new_rays = self.kernelsnet(rays)
                 # print(new_rays.shape)
-                pt_num = new_rays.shape[1]//7
+                ray_num,pt_num = new_rays.shape[0]*new_rays.shape[2]*new_rays.shape[3],new_rays.shape[1]//7
                 new_rays = new_rays.permute(0,2,3,1).reshape(-1,pt_num,7) # rayo rayd weight
                 rayso,raysd,weight = new_rays[...,:3],new_rays[...,3:6],new_rays[...,6],
-                weight = self.sigma_activate(weight)
-                weight = weight/(weight.sum(-1,keepdims=True)+1e-2)
-                new_rays = torch.stack([rayso,raysd],-1)
-
-                ray_num, pt_num = new_rays.shape[:2]
-
+                # revise: kernelsnet output delta
+                # print(rays.shape,new_rays.shape) #(2 9 24 24)(1152,3,7)需要把rays对应的光线拿出来，应该就是9去掉rgb后的6个channel
+                rays = rays[:,:6].permute(0,2,3,1).reshape(-1,2,3)
+                rayso1,raysd1 = rays[:,0:1,:],rays[:,1:2,:] #origin ray 中间channel置1，为了和delta相加（channel=ptnum）
+                # print(rayso.shape,rayso1.shape)
+                weight = torch.nn.functional.softmax(weight,dim=-1)
+                new_rays = torch.stack([rayso+rayso1,raysd+raysd1],-1).reshape(-1, 3, 2)
+                align = rayso1[:, 0, :].abs().mean()
+                align += (raysd1[:, 0, :].abs().mean() * 10) # align_loss,惩罚delta的整体偏移
+                # 
                 # time1 = time.time()
-                rgb, depth, acc, extras = self.render(H, W, K, chunk, new_rays.reshape(-1, 3, 2), **kwargs)
-                rgb_pts = rgb.reshape(ray_num, pt_num, 3)
-                rgb0_pts = extras['rgb0'].reshape(ray_num, pt_num, 3)
+                shuffle_idx = torch.randperm(new_rays.shape[0])
+                # print(shuffle_idx[0])
+                redo_idx = torch.argsort(shuffle_idx)
+                new_rays = new_rays[shuffle_idx]
+                rgb, depth, acc, extras = self.render(H, W, K, chunk, new_rays, **kwargs)
+                rgb,extras['rgb0'] = rgb[redo_idx],extras['rgb0'][redo_idx]
+                rgb = rgb.reshape(ray_num, pt_num, 3)
+                rgb0 = extras['rgb0'].reshape(ray_num, pt_num, 3)
 
                 # time2 = time.time()
-                rgb = torch.sum(rgb_pts * weight[..., None], dim=1)
-                rgb0 = torch.sum(rgb0_pts * weight[..., None], dim=1)
+                rgb = torch.sum(rgb * weight[..., None], dim=1)
+                rgb0 = torch.sum(rgb0 * weight[..., None], dim=1)
                 rgb = self.tonemapping(rgb)
                 rgb0 = self.tonemapping(rgb0)
-
+                # import pdb
+                # pdb.set_trace()
                 # time3 = time.time()
-                # print(f"Time| kernel: {time1-time0:.5f}, nerf: {time2-time1:.5f}, fuse: {time3-time2}")
-
+                # print(f"Time| kernel: {time1-time0:.5f}, nerf: {time2-time1:.5f}, fuse: {time3-time2}"
+                other_loss = {"align":align}
                 other_loss = {}
                 # compute align loss, some priors of the ray pattern
                 # ========================
                 # if align_loss is not None:
                 #     other_loss["align"] = align_loss.reshape(1, 1)
 
-                return rgb, rgb0, other_loss
+                return rgb, rgb0, other_loss    
             else:
-                rays = rays[:,:6].reshape(rays.shape[0],2,3,rays.shape[2],rays.shape[3]).permute(0,3,4,2,1).reshape(-1,3,2)
-                rgb, depth, acc, extras = self.render(H, W, K, chunk, rays, **kwargs)
+                raysod = rays[:,:6].reshape(rays.shape[0],2,3,rays.shape[2],rays.shape[3]).permute(0,3,4,2,1).reshape(-1,3,2)
+                # rgbref = rays[:,6:].permute(0,2,3,1).reshape(-1,3)
+                shuffle_idx = torch.randperm(raysod.shape[0])
+                redo_idx = torch.argsort(shuffle_idx)
+                raysod = raysod[shuffle_idx]
+                # rgbref = rgbref[shuffle_idx]
+                # raysod = raysod[0].repeat(10,1,1)
+                rgb, depth, acc, extras = self.render(H, W, K, chunk, raysod, **kwargs)
+                rgb,extras['rgb0'] = rgb[redo_idx],extras['rgb0'][redo_idx]
+                # rgbref = rgbref[redo_idx]
+                # return rgbref, rgbref, {}
                 return self.tonemapping(rgb), self.tonemapping(extras['rgb0']), {}
-
         #  evaluation
         else:
             assert poses is not None, "Please specify poses when in the eval model"

@@ -1,17 +1,22 @@
-# CUDA_VISIBLE_DEVICES=1 python3 run_nerf_unet3d.py --config config112237.txt
+# CUDA_VISIBLE_DEVICES=2 python3 run_nerf_unet3d.py --config config180919.txt
 # conda activate tinycuda3
 # cd /home/wtxt/a/Deblur-NeRF
 num_gpu = 1
-expname = two_stage_origin_test
+expname = test
+# expname = align-1
 basedir = /home/wtxt/a/_record/deblur-nerf
 datadir = /home/wtxt/share-backup/dataset_halfglass/
 tbdir = /home/wtxt/a/_record/deblur-nerf/tensorboard_exp
 dataset_type = llff
 factor = 2
 kernel_ptnum = 10
-
+kernel_start_iter = 4800 #1200
+# kernel_prior_weight = 0.1
+# prior_start_iter = 15000
+kernel_align_weight = 1
+perturb = 0 #1
 i_weights = 2200 #
-i_testset = 1100 #
+i_testset = 111 #
 i_video = 66000
 llffhold = 8
 N_rand = 4024 #1024
@@ -25,10 +30,6 @@ use_viewdirs = True
 raw_noise_std = 1e0
 rgb_activate = sigmoid
 
-kernel_start_iter = 4800 #1200
-# kernel_prior_weight = 0.1
-# prior_start_iter = 15000
-kernel_align_weight = 0.1
 align_start_iter = 0
 align_end_iter = 180000
 
